@@ -1,59 +1,116 @@
 # TickTick CLI
 
-A command-line interface for TickTick API.
+A TypeScript command-line client for managing TickTick tasks and projects.
+
+## Features
+
+- Authenticate with TickTick (credentials or browser-assisted flow)
+- List, create, update, complete, and delete tasks
+- List, create, update, and delete projects
+- Interactive prompts for missing command options
+
+## Requirements
+
+- Node.js 18+
+- npm
 
 ## Installation
+
+### Local development
+
+```bash
+npm install
+npm run build
+npm link
+```
+
+After linking, use the CLI with:
+
+```bash
+tt --help
+```
+
+### From npm (when published)
 
 ```bash
 npm install -g ticktick-cli
 ```
 
-## Usage
+## Quick Start
+
+1. Authenticate:
 
 ```bash
-tt [command] [options]
+tt auth login
+```
+
+2. Check auth status:
+
+```bash
+tt auth status
+```
+
+3. Create a task:
+
+```bash
+tt tasks add --title "Pay electricity bill" --project inbox --due 2026-03-05
+```
+
+4. List tasks:
+
+```bash
+tt tasks list
 ```
 
 ## Commands
 
 ### Authentication
-- `tt auth login` - Login to TickTick
-- `tt auth logout` - Logout from TickTick
-- `tt auth status` - Check authentication status
+
+- `tt auth login`
+- `tt auth login --username <username> --password <password>`
+- `tt auth logout`
+- `tt auth status`
+- `tt auth whoami`
+
+Notes:
+- Browser login is partially manual in the current implementation.
+- You may be prompted to paste TickTick session cookie `t=...`.
 
 ### Tasks
-- `tt tasks list` - List all tasks
-- `tt tasks add` - Add a new task
-- `tt tasks show <id>` - Show task details
-- `tt tasks update <id>` - Update a task
-- `tt tasks delete <id>` - Delete a task
+
+- `tt tasks list`
+- `tt tasks list --project <projectId>`
+- `tt tasks list --completed`
+- `tt tasks list --uncompleted`
+- `tt tasks add --title <title> [--content <content>] [--project <projectId>] [--due YYYY-MM-DD]`
+- `tt tasks show <id>`
+- `tt tasks update <id> [--title <title>] [--content <content>] [--project <projectId>] [--due YYYY-MM-DD] [--completed|--uncompleted]`
+- `tt tasks complete <id>`
+- `tt tasks uncomplete <id>`
+- `tt tasks delete <id>`
 
 ### Projects
-- `tt projects list` - List all projects
-- `tt projects add` - Add a new project
-- `tt projects show <id>` - Show project details
-- `tt projects update <id>` - Update a project
-- `tt projects delete <id>` - Delete a project
 
-## Configuration
-
-The CLI stores configuration in `~/.config/ticktick-cli/config.json`
+- `tt projects list`
+- `tt projects add --name <name> [--color <hex>]`
+- `tt projects show <id>`
+- `tt projects update <id> [--name <name>] [--color <hex>]`
+- `tt projects delete <id>`
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build
 npm run build
-
-# Run in development
 npm run dev
-
-# Test
 npm test
-
-# Lint
 npm run lint
 ```
+
+## Configuration
+
+Authentication and user data are stored locally via `configstore` under the package name `ticktick-cli`.
+
+## License
+
+MIT

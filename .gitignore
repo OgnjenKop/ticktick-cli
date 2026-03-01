@@ -1,7 +1,35 @@
+# Dependencies
 node_modules/
-.dist
+
+# Build output
 dist/
-.coverage
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Logs
 *.log
-*.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS / Editor
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local config and caches
+.cache/
+.tmp/
+tmp/
+
+# Optional local test artifacts
+playwright-report/
+test-results/

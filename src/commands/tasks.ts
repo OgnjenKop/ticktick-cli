@@ -3,6 +3,7 @@ import inquirer from 'inquirer';
 import { logger } from '../utils/logger';
 import { TickTickApi } from '../core/api';
 import { Task } from '../core/types';
+import { validators, validationMessages } from '../utils/validation';
 
 const api = new TickTickApi();
 
@@ -67,7 +68,11 @@ tasksCommand
           type: 'input',
           name: 'title',
           message: 'Task title:',
-          validate: (input) => input.trim().length > 0 || 'Title is required',
+          validate: (input) => {
+            if (!input || input.trim().length === 0) return 'Title is required';
+            if (!validators.isValidTaskTitle(input)) return validationMessages.taskTitle;
+            return true;
+          },
           when: !options.title,
         },
         {
@@ -89,7 +94,7 @@ tasksCommand
           message: 'Due date (YYYY-MM-DD, optional):',
           validate: (input) => {
             if (!input) return true;
-            return /^\d{4}-\d{2}-\d{2}$/.test(input) || 'Invalid date format. Use YYYY-MM-DD';
+            return validators.isValidDate(input) || validationMessages.date;
           },
           when: !options.due,
         },

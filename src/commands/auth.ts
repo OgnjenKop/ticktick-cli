@@ -4,6 +4,7 @@ import open from 'open';
 import { logger } from '../utils/logger';
 import { TickTickApi } from '../core/api';
 import { ConfigManager } from '../core/config';
+import { validators, validationMessages } from '../utils/validation';
 
 const api = new TickTickApi();
 const config = new ConfigManager();
@@ -56,7 +57,15 @@ authCommand
             type: 'input',
             name: 'sessionCookie',
             message: 'Paste your session cookie (t=...)',
-            validate: (input) => input.trim().length > 0 || 'Session cookie is required',
+            validate: (input) => {
+              if (!input || input.trim().length === 0) return 'Session cookie is required';
+              // Validate cookie format (should start with t= or be the token itself)
+              const cookie = input.trim();
+              if (!cookie.startsWith('t=') && !/^[a-zA-Z0-9_-]+$/.test(cookie)) {
+                return 'Invalid cookie format. Should be "t=..." or just the token value';
+              }
+              return true;
+            },
           },
         ]);
 
@@ -70,10 +79,10 @@ authCommand
             params: { includeWeb: true },
           });
           const user = {
-            id: response.data.id,
-            username: response.data.email || 'unknown',
-            email: response.data.email || 'unknown',
-            name: response.data.name || response.data.email || 'unknown',
+            id: response.id,
+            username: response.email || 'unknown',
+            email: response.email || 'unknown',
+            name: response.name || response.email || 'unknown',
           };
           config.setUser(user);
           logger.success('Authentication successful!');
@@ -100,14 +109,22 @@ authCommand
             type: 'input',
             name: 'username',
             message: 'TickTick username/email:',
-            validate: (input) => input.trim().length > 0 || 'Username is required',
+            validate: (input) => {
+              if (!input || input.trim().length === 0) return 'Username is required';
+              if (!validators.isValidUsername(input)) return validationMessages.username;
+              return true;
+            },
           },
           {
             type: 'password',
             name: 'password',
             message: 'Password:',
             mask: '*',
-            validate: (input) => input.trim().length > 0 || 'Password is required',
+            validate: (input) => {
+              if (!input || input.trim().length === 0) return 'Password is required';
+              if (!validators.isValidPassword(input)) return validationMessages.password;
+              return true;
+            },
           },
         ]);
 

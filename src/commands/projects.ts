@@ -3,6 +3,7 @@ import inquirer from 'inquirer';
 import { logger } from '../utils/logger';
 import { TickTickApi } from '../core/api';
 import { Project } from '../core/types';
+import { validators, validationMessages } from '../utils/validation';
 
 const api = new TickTickApi();
 
@@ -53,7 +54,11 @@ projectsCommand
           type: 'input',
           name: 'name',
           message: 'Project name:',
-          validate: (input) => input.trim().length > 0 || 'Name is required',
+          validate: (input) => {
+            if (!input || input.trim().length === 0) return 'Name is required';
+            if (!validators.isValidProjectName(input)) return validationMessages.projectName;
+            return true;
+          },
           when: !options.name,
         },
         {
@@ -61,6 +66,10 @@ projectsCommand
           name: 'color',
           message: 'Project color (hex code, optional):',
           default: '#4A90E2',
+          validate: (input) => {
+            if (!input) return true;
+            return validators.isValidHexColor(input) || validationMessages.hexColor;
+          },
           when: !options.color,
         },
       ]);

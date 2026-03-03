@@ -1,10 +1,11 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from 'axios';
 import ConfigStore from 'configstore';
 import { User, Project, Task } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
 import Bottleneck from 'bottleneck';
 import EventEmitter from 'events';
+import { networkInterfaces } from 'os';
 
 interface TickTickApiConfig {
   baseURL?: string;
@@ -12,6 +13,7 @@ interface TickTickApiConfig {
   maxRetries?: number;
   enableCache?: boolean;
   cacheTTL?: number;
+  cacheMaxSize?: number;
   rateLimiting?: boolean;
   maxConcurrent?: number;
   minTimeBetweenRequests?: number;
@@ -19,6 +21,18 @@ interface TickTickApiConfig {
 
 const pkgPath = path.join(__dirname, '../../package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+
+// Stable JSON serialization for cache keys
+function stableStringify(obj: any): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(stableStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((k) => `"${k}":${stableStringify(obj[k])}`).join(',') + '}';
+}
 
 export class TickTickApi {
   private client: AxiosInstance;
@@ -29,15 +43,17 @@ export class TickTickApi {
   private eventEmitter: EventEmitter;
   private offlineQueue: Array<() => Promise<any>> = [];
   private configOptions: TickTickApiConfig;
+  private cacheCleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config?: TickTickApiConfig) {
     this.config = new ConfigStore(pkg.name);
     this.configOptions = {
-      baseURL: 'https://api.ticktick.com/api/v2',
+      baseURL: process.env.TICKTICK_API_BASE_URL || 'https://api.ticktick.com/api/v2',
       timeout: 10000,
       maxRetries: 3,
       enableCache: true,
       cacheTTL: 300000, // 5 minutes
+      cacheMaxSize: 100,
       rateLimiting: true,
       maxConcurrent: 5,
       minTimeBetweenRequests: 100,
@@ -50,8 +66,9 @@ export class TickTickApi {
       minTime: this.configOptions.minTimeBetweenRequests,
     });
 
-    // Initialize event emitter
+    // Initialize event emitter with max listeners
     this.eventEmitter = new EventEmitter();
+    this.eventEmitter.setMaxListeners(100);
 
     this.client = axios.create({
       baseURL: this.configOptions.baseURL,
@@ -97,6 +114,101 @@ export class TickTickApi {
         throw new Error(`Network error: ${error.message}`);
       }
     );
+
+    // Start cache cleanup interval
+    this.startCacheCleanup();
+  }
+
+  private startCacheCleanup(): void {
+    if (this.configOptions.enableCache && this.configOptions.cacheTTL) {
+      this.cacheCleanupInterval = setInterval(() => {
+        this.cleanupCache();
+      }, this.configOptions.cacheTTL);
+    }
+  }
+
+  private stopCacheCleanup(): void {
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+      this.cacheCleanupInterval = null;
+    }
+  }
+
+  /**
+   * Clean up resources (cache interval, event listeners)
+   * Call this when shutting down the application
+   */
+  public destroy(): void {
+    this.stopCacheCleanup();
+    this.eventEmitter.removeAllListeners();
+    this.cache.clear();
+    this.offlineQueue = [];
+  }
+
+  private cleanupCache(): void {
+    const now = Date.now();
+    const ttl = this.configOptions.cacheTTL || 300000;
+
+    for (const [key, value] of this.cache.entries()) {
+      if (now - value.timestamp > ttl) {
+        this.cache.delete(key);
+      }
+    }
+
+    // Enforce max size by removing oldest entries
+    const maxSize = this.configOptions.cacheMaxSize || 100;
+    if (this.cache.size > maxSize) {
+      const entries = Array.from(this.cache.entries()).sort(
+        (a, b) => a[1].timestamp - b[1].timestamp
+      );
+      for (let i = 0; i < this.cache.size - maxSize; i++) {
+        this.cache.delete(entries[i][0]);
+      }
+    }
+  }
+
+  /**
+   * Check if the system has network connectivity
+   * Note: This checks for network interfaces, not actual internet connectivity
+   * For reliable connectivity checks, make a test request to the API
+   */
+  private isOnline(): boolean {
+    try {
+      const nets = networkInterfaces();
+      for (const name of Object.keys(nets)) {
+        const net = nets[name];
+        if (!net) continue;
+        for (const netaddr of net) {
+          // Skip internal (loopback) interfaces
+          if (netaddr.family === 'IPv4' && !netaddr.internal) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch {
+      // If we can't check network interfaces, assume online
+      return true;
+    }
+  }
+
+  private formatErrorMessage(error: any): string {
+    if (error.response?.status === 401) {
+      return 'Authentication failed. Please login again.';
+    }
+    if (error.response?.status === 403) {
+      return 'Permission denied.';
+    }
+    if (error.response?.status === 404) {
+      return 'Resource not found.';
+    }
+    if (error.code === 'ECONNABORTED') {
+      return 'Request timeout. Please try again.';
+    }
+    if (error.code === 'ENOTFOUND') {
+      return 'Network error. Please check your connection.';
+    }
+    return error.message || 'An unexpected error occurred.';
   }
 
   // Event emitter methods
@@ -113,7 +225,7 @@ export class TickTickApi {
 
   // Cache management methods
   private getCacheKey(method: string, ...args: any[]): string {
-    return `${method}:${JSON.stringify(args)}`;
+    return `${method}:${stableStringify(args)}`;
   }
 
   private getFromCache<T>(key: string): T | null {
@@ -126,7 +238,7 @@ export class TickTickApi {
       this.configOptions.cacheTTL &&
       Date.now() - cached.timestamp < this.configOptions.cacheTTL
     ) {
-      return cached.data;
+      return cached.data as T;
     }
 
     return null;
@@ -156,7 +268,7 @@ export class TickTickApi {
 
   // Offline queue management
   private async processOfflineQueue(): Promise<void> {
-    if (navigator?.onLine && this.offlineQueue.length > 0) {
+    if (this.isOnline() && this.offlineQueue.length > 0) {
       const queue = [...this.offlineQueue];
       this.offlineQueue = [];
 
@@ -214,10 +326,7 @@ export class TickTickApi {
       return user;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      if (error.response?.data?.errorCode) {
-        throw new Error(`Login failed: ${error.response.data.errorCode}`);
-      }
-      throw new Error(`Login failed: ${error.message}`);
+      throw new Error(`Login failed: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -235,7 +344,7 @@ export class TickTickApi {
       return project;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to get project: ${error.message}`);
+      throw new Error(`Failed to get project: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -252,7 +361,7 @@ export class TickTickApi {
       return project;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to create project: ${error.message}`);
+      throw new Error(`Failed to create project: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -269,7 +378,7 @@ export class TickTickApi {
       return project;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to update project: ${error.message}`);
+      throw new Error(`Failed to update project: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -281,7 +390,7 @@ export class TickTickApi {
       this.eventEmitter.emit('projectDeleted', projectId);
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to delete project: ${error.message}`);
+      throw new Error(`Failed to delete project: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -303,7 +412,7 @@ export class TickTickApi {
       return task;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to get task: ${error.message}`);
+      throw new Error(`Failed to get task: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -320,7 +429,7 @@ export class TickTickApi {
       return task;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to update task: ${error.message}`);
+      throw new Error(`Failed to update task: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -332,7 +441,7 @@ export class TickTickApi {
       this.eventEmitter.emit('taskDeleted', taskId);
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to delete task: ${error.message}`);
+      throw new Error(`Failed to delete task: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -349,7 +458,7 @@ export class TickTickApi {
       return task;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to complete task: ${error.message}`);
+      throw new Error(`Failed to complete task: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -366,7 +475,7 @@ export class TickTickApi {
       return task;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to uncomplete task: ${error.message}`);
+      throw new Error(`Failed to uncomplete task: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -388,7 +497,7 @@ export class TickTickApi {
       return projects;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to get projects: ${error.message}`);
+      throw new Error(`Failed to get projects: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -400,8 +509,8 @@ export class TickTickApi {
   ): Promise<{ tasks: Task[]; total: number; hasMore: boolean }> {
     const cacheKey = this.getCacheKey('getTasks', { projectId, completed, limit, offset });
 
-    const cached = this.getFromCache<{ tasks: Task[]; total: number }>(cacheKey);
-    if (cached) return { ...cached, hasMore: cached.tasks.length === limit };
+    const cached = this.getFromCache<{ tasks: Task[]; total: number; hasMore: boolean }>(cacheKey);
+    if (cached) return cached;
 
     try {
       const params: any = {
@@ -429,7 +538,7 @@ export class TickTickApi {
       return result;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to get tasks: ${error.message}`);
+      throw new Error(`Failed to get tasks: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -450,13 +559,13 @@ export class TickTickApi {
       return response.data as Task[];
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to batch update tasks: ${error.message}`);
+      throw new Error(`Failed to batch update tasks: ${this.formatErrorMessage(error)}`);
     }
   }
 
   // Offline support
   public async createTask(task: Partial<Task>, offline: boolean = false): Promise<Task> {
-    if (offline || !navigator?.onLine) {
+    if (offline || !this.isOnline()) {
       const offlineTask = { ...task, id: 'offline-' + Date.now() } as Task;
       this.offlineQueue.push(() => this.createTask(task, false));
       return offlineTask;
@@ -472,7 +581,7 @@ export class TickTickApi {
       return createdTask;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
-      throw new Error(`Failed to create task: ${error.message}`);
+      throw new Error(`Failed to create task: ${this.formatErrorMessage(error)}`);
     }
   }
 
@@ -519,27 +628,24 @@ export class TickTickApi {
     this.eventEmitter.emit('authChange', { authenticated: false });
   }
 
-  public async get<T>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
-    return this.withRateLimiting(() => this.client.get<T>(url, config));
+  // Generic HTTP methods that return raw data (not AxiosResponse)
+  public async get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    const response = await this.withRateLimiting(() => this.client.get<T>(url, config));
+    return response.data;
   }
 
-  public async post<T>(
-    url: string,
-    data?: any,
-    config?: AxiosRequestConfig
-  ): Promise<AxiosResponse<T>> {
-    return this.withRateLimiting(() => this.client.post<T>(url, data, config));
+  public async post<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+    const response = await this.withRateLimiting(() => this.client.post<T>(url, data, config));
+    return response.data;
   }
 
-  public async put<T>(
-    url: string,
-    data?: any,
-    config?: AxiosRequestConfig
-  ): Promise<AxiosResponse<T>> {
-    return this.withRateLimiting(() => this.client.put<T>(url, data, config));
+  public async put<T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> {
+    const response = await this.withRateLimiting(() => this.client.put<T>(url, data, config));
+    return response.data;
   }
 
-  public async delete<T>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
-    return this.withRateLimiting(() => this.client.delete<T>(url, config));
+  public async delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
+    const response = await this.withRateLimiting(() => this.client.delete<T>(url, config));
+    return response.data;
   }
 }

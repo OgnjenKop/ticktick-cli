@@ -8,6 +8,7 @@ A TypeScript command-line client for managing TickTick tasks and projects.
 - List, create, update, complete, and delete tasks
 - List, create, update, and delete projects
 - Interactive prompts for missing command options
+- Built-in `doctor` command for live smoke checks
 
 ## Requirements
 
@@ -68,6 +69,7 @@ tt tasks list
 
 - `tt auth login`
 - `tt auth login --username <username> --password <password>`
+- `tt auth login --no-browser`
 - `tt auth logout`
 - `tt auth status`
 - `tt auth whoami`
@@ -76,12 +78,26 @@ Notes:
 - Browser login is partially manual in the current implementation.
 - You may be prompted to paste TickTick session cookie `t=...`.
 
+### Diagnostics
+
+- `tt doctor`
+- `tt doctor --json`
+- `tt doctor --write`
+- `tt doctor --json --write`
+- `tt doctor --write --project <projectId>`
+
+Notes:
+- `tt doctor` is read-only and checks auth, project listing, and task listing.
+- `tt doctor --json` prints structured output for scripts and CI.
+- `tt doctor --write` creates and deletes a disposable task to verify live write access.
+
 ### Tasks
 
 - `tt tasks list`
 - `tt tasks list --project <projectId>`
 - `tt tasks list --completed`
 - `tt tasks list --uncompleted`
+- `tt tasks list --limit <number> --offset <number>`
 - `tt tasks add --title <title> [--content <content>] [--project <projectId>] [--due YYYY-MM-DD]`
 - `tt tasks show <id>`
 - `tt tasks update <id> [--title <title>] [--content <content>] [--project <projectId>] [--due YYYY-MM-DD] [--completed|--uncompleted]`

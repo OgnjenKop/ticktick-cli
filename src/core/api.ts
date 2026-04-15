@@ -19,6 +19,15 @@ interface TickTickApiConfig {
   minTimeBetweenRequests?: number;
 }
 
+interface TickTickApiError extends Error {
+  response?: {
+    status?: number;
+    statusText?: string;
+    data?: any;
+  };
+  code?: string;
+}
+
 const pkgPath = path.join(__dirname, '../../package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
 
@@ -97,21 +106,36 @@ export class TickTickApi {
     this.client.interceptors.response.use(
       (response) => response,
       (error: AxiosError) => {
+        const apiError = new Error(error.message) as TickTickApiError;
+        apiError.code = error.code;
+
+        if (error.response) {
+          apiError.response = {
+            status: error.response.status,
+            statusText: error.response.statusText,
+            data: error.response.data,
+          };
+        }
+
         // Handle specific error codes
         if (error.response) {
           const data = error.response.data as any;
           if (data && data.errorCode) {
             if (data.errorCode === 'user_not_sign_on') {
-              throw new Error('Authentication required. Please login first.');
+              apiError.message = 'Authentication required. Please login first.';
+              throw apiError;
             }
-            throw new Error(`${data.errorCode}: ${data.errorMessage || 'Unknown error'}`);
+            apiError.message = `${data.errorCode}: ${data.errorMessage || 'Unknown error'}`;
+            throw apiError;
           }
           const status = error.response.status;
-          throw new Error(`API error: ${status} ${error.response.statusText}`);
+          apiError.message = `API error: ${status} ${error.response.statusText}`;
+          throw apiError;
         }
 
         // Handle network errors
-        throw new Error(`Network error: ${error.message}`);
+        apiError.message = `Network error: ${error.message}`;
+        throw apiError;
       }
     );
 
@@ -124,6 +148,7 @@ export class TickTickApi {
       this.cacheCleanupInterval = setInterval(() => {
         this.cleanupCache();
       }, this.configOptions.cacheTTL);
+      this.cacheCleanupInterval.unref?.();
     }
   }
 
@@ -192,7 +217,7 @@ export class TickTickApi {
     }
   }
 
-  private formatErrorMessage(error: any): string {
+  private formatErrorMessage(error: TickTickApiError): string {
     if (error.response?.status === 401) {
       return 'Authentication failed. Please login again.';
     }
@@ -282,10 +307,98 @@ export class TickTickApi {
     }
   }
 
+  private buildUser(settings: any, fallbackUsername: string = 'unknown'): User {
+    return {
+      id: settings.id,
+      username: settings.username || settings.email || fallbackUsername,
+      email: settings.email || fallbackUsername,
+      name: settings.name || settings.email || fallbackUsername,
+    };
+  }
+
+  private normalizeTask(task: any): Task {
+    const completed = task.completed ?? task.status === 2;
+    return {
+      id: task.id,
+      title: task.title || '',
+      content: task.content || '',
+      projectId: task.projectId || 'inbox',
+      completed,
+      createdAt: task.createdAt || task.createdTime || '',
+      updatedAt: task.updatedAt || task.modifiedTime || '',
+      dueDate: task.dueDate,
+      priority: task.priority,
+      tags: task.tags,
+      status: task.status,
+      createdTime: task.createdTime,
+      modifiedTime: task.modifiedTime,
+      items: task.items,
+    };
+  }
+
+  private normalizeProject(project: any): Project {
+    return {
+      id: project.id,
+      name: project.name || '',
+      color: project.color || '',
+      sortOrder: project.sortOrder || 0,
+      isOwner: project.isOwner ?? true,
+      permission: project.permission || '',
+      createdAt: project.createdAt || '',
+      updatedAt: project.updatedAt || '',
+      kind: project.kind,
+      groupId: project.groupId,
+    };
+  }
+
+  private async getRawTaskById(taskId: string): Promise<any> {
+    const response = await this.withRateLimiting(() =>
+      this.client.get('/batch/task', {
+        params: { taskId, getAll: true },
+      })
+    );
+
+    const task = response.data?.[0];
+    if (!task) {
+      throw new Error('Task not found');
+    }
+
+    return task;
+  }
+
+  private async getInboxProjectId(): Promise<string> {
+    const cachedInboxId = this.config.get('inboxId');
+    if (typeof cachedInboxId === 'string' && cachedInboxId.length > 0) {
+      return cachedInboxId;
+    }
+
+    const response = await this.withRateLimiting(() => this.client.get('/batch/check/0'));
+    const inboxId = response.data?.inboxId;
+
+    if (!inboxId) {
+      throw new Error('Unable to determine inbox project ID');
+    }
+
+    this.config.set('inboxId', inboxId);
+    return inboxId;
+  }
+
+  private async findProjectById(projectId: string): Promise<Project> {
+    const projects = await this.getProjects(false);
+    const project = projects.find((item) => item.id === projectId);
+
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    this.setInCache(this.getCacheKey('getProjectById', projectId), project);
+    return project;
+  }
+
   public async login(username: string, password: string): Promise<User> {
     try {
       const response = await this.client.post(
-        '/user/signon',
+        '/user/signin',
         {
           username,
           password,
@@ -306,19 +419,7 @@ export class TickTickApi {
       this.token = token;
       this.config.set('token', token);
 
-      // Get user info
-      const userResponse = await this.withRateLimiting(() =>
-        this.client.get('/user/preferences/settings', {
-          params: { includeWeb: true },
-        })
-      );
-
-      const user: User = {
-        id: userResponse.data.id,
-        username: username,
-        email: userResponse.data.email || username,
-        name: userResponse.data.name || username,
-      };
+      const user = await this.getCurrentUser(username);
 
       this.config.set('user', user);
       this.eventEmitter.emit('authChange', { authenticated: true, user });
@@ -330,6 +431,25 @@ export class TickTickApi {
     }
   }
 
+  public async getCurrentUser(fallbackUsername?: string): Promise<User> {
+    try {
+      const userResponse = await this.withRateLimiting(() =>
+        this.client.get('/user/preferences/settings', {
+          params: { includeWeb: true },
+        })
+      );
+
+      const user = this.buildUser(userResponse.data, fallbackUsername);
+      this.config.set('user', user);
+      return user;
+    } catch (error: any) {
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        this.clearToken();
+      }
+      throw new Error(`Failed to get current user: ${this.formatErrorMessage(error)}`);
+    }
+  }
+
   public async getProjectById(projectId: string): Promise<Project> {
     const cacheKey = this.getCacheKey('getProjectById', projectId);
 
@@ -337,11 +457,7 @@ export class TickTickApi {
     if (cached) return cached;
 
     try {
-      const response = await this.withRateLimiting(() => this.client.get(`/projects/${projectId}`));
-
-      const project = response.data as Project;
-      this.setInCache(cacheKey, project);
-      return project;
+      return await this.findProjectById(projectId);
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
       throw new Error(`Failed to get project: ${this.formatErrorMessage(error)}`);
@@ -351,11 +467,18 @@ export class TickTickApi {
   public async createProject(name: string, color: string = '#4A90E2'): Promise<Project> {
     try {
       const response = await this.withRateLimiting(() =>
-        this.client.post('/projects', { name, color })
+        this.client.post('/batch/project', {
+          add: [{ name, color, kind: 'TASK' }],
+        })
       );
 
-      const project = response.data as Project;
+      const projectId = Object.keys(response.data?.id2etag || {})[0];
+      if (!projectId) {
+        throw new Error('Project creation did not return an ID');
+      }
+
       this.clearCache(); // Invalidate cache after creation
+      const project = await this.findProjectById(projectId);
       this.eventEmitter.emit('projectUpdated', project);
 
       return project;
@@ -368,11 +491,14 @@ export class TickTickApi {
   public async updateProject(projectId: string, updates: Partial<Project>): Promise<Project> {
     try {
       const response = await this.withRateLimiting(() =>
-        this.client.put(`/projects/${projectId}`, updates)
+        this.client.post('/batch/project', {
+          update: [{ id: projectId, ...updates }],
+        })
       );
 
-      const project = response.data as Project;
+      const updatedProjectId = Object.keys(response.data?.id2etag || {})[0] || projectId;
       this.clearCache(); // Invalidate cache after update
+      const project = await this.findProjectById(updatedProjectId);
       this.eventEmitter.emit('projectUpdated', project);
 
       return project;
@@ -384,7 +510,11 @@ export class TickTickApi {
 
   public async deleteProject(projectId: string): Promise<void> {
     try {
-      await this.withRateLimiting(() => this.client.delete(`/projects/${projectId}`));
+      await this.withRateLimiting(() =>
+        this.client.post('/batch/project', {
+          delete: [projectId],
+        })
+      );
 
       this.clearCache(); // Invalidate cache after deletion
       this.eventEmitter.emit('projectDeleted', projectId);
@@ -407,7 +537,7 @@ export class TickTickApi {
         })
       );
 
-      const task = response.data[0] as Task;
+      const task = this.normalizeTask(response.data[0]);
       this.setInCache(cacheKey, task);
       return task;
     } catch (error: any) {
@@ -418,11 +548,25 @@ export class TickTickApi {
 
   public async updateTask(taskId: string, updates: Partial<Task>): Promise<Task> {
     try {
+      const currentTask = await this.getRawTaskById(taskId);
+      const rawTask = {
+        ...currentTask,
+        ...updates,
+        id: taskId,
+        status:
+          updates.completed === undefined ? (currentTask.status ?? 0) : updates.completed ? 2 : 0,
+      };
+      delete (rawTask as Partial<Task>).completed;
+      delete (rawTask as Partial<Task>).createdAt;
+      delete (rawTask as Partial<Task>).updatedAt;
+
       const response = await this.withRateLimiting(() =>
-        this.client.put(`/batch/task/${taskId}`, updates)
+        this.client.post('/batch/task/update', {
+          updates: [rawTask],
+        })
       );
 
-      const task = response.data as Task;
+      const task = this.normalizeTask((response.data as any[])[0] || rawTask);
       this.clearCache(); // Invalidate cache after update
       this.eventEmitter.emit('taskUpdated', task);
 
@@ -435,7 +579,20 @@ export class TickTickApi {
 
   public async deleteTask(taskId: string): Promise<void> {
     try {
-      await this.withRateLimiting(() => this.client.delete(`/batch/task/${taskId}`));
+      const task = await this.getRawTaskById(taskId);
+      const projectId =
+        task.projectId === 'inbox' ? await this.getInboxProjectId() : task.projectId;
+
+      await this.withRateLimiting(() =>
+        this.client.post('/batch/task', {
+          delete: [
+            {
+              projectId,
+              taskId,
+            },
+          ],
+        })
+      );
 
       this.clearCache(); // Invalidate cache after deletion
       this.eventEmitter.emit('taskDeleted', taskId);
@@ -447,14 +604,8 @@ export class TickTickApi {
 
   public async completeTask(taskId: string): Promise<Task> {
     try {
-      const response = await this.withRateLimiting(() =>
-        this.client.post(`/batch/task/${taskId}/complete`)
-      );
-
-      const task = response.data as Task;
-      this.clearCache(); // Invalidate cache after completion
+      const task = await this.updateTask(taskId, { completed: true });
       this.eventEmitter.emit('taskCompleted', task);
-
       return task;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
@@ -464,14 +615,8 @@ export class TickTickApi {
 
   public async uncompleteTask(taskId: string): Promise<Task> {
     try {
-      const response = await this.withRateLimiting(() =>
-        this.client.post(`/batch/task/${taskId}/uncomplete`)
-      );
-
-      const task = response.data as Task;
-      this.clearCache(); // Invalidate cache after uncompletion
+      const task = await this.updateTask(taskId, { completed: false });
       this.eventEmitter.emit('taskUncompleted', task);
-
       return task;
     } catch (error: any) {
       this.eventEmitter.emit('error', error);
@@ -492,7 +637,7 @@ export class TickTickApi {
     try {
       const response = await this.withRateLimiting(() => this.client.get('/projects'));
 
-      const projects = response.data as Project[];
+      const projects = (response.data as any[]).map((project) => this.normalizeProject(project));
       this.setInCache(cacheKey, projects);
       return projects;
     } catch (error: any) {
@@ -527,10 +672,10 @@ export class TickTickApi {
         this.client.get('/batch/task', { params })
       );
 
-      const tasks = response.data as Task[];
+      const tasks = (response.data as any[]).map((task) => this.normalizeTask(task));
       const result = {
         tasks,
-        total: tasks.length,
+        total: offset + tasks.length,
         hasMore: tasks.length === limit,
       };
 
@@ -574,7 +719,7 @@ export class TickTickApi {
     try {
       const response = await this.withRateLimiting(() => this.client.post('/batch/task', task));
 
-      const createdTask = response.data as Task;
+      const createdTask = this.normalizeTask(response.data);
       this.clearCache(); // Invalidate cache after creation
       this.eventEmitter.emit('taskCreated', createdTask);
 
@@ -616,6 +761,7 @@ export class TickTickApi {
     this.token = null;
     this.config.delete('token');
     this.config.delete('user');
+    this.config.delete('inboxId');
   }
 
   public getToken(): string | null {

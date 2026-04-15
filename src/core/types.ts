@@ -32,6 +32,10 @@ export interface Task {
   dueDate?: string;
   priority?: number;
   tags?: string[];
+  status?: number;
+  createdTime?: string;
+  modifiedTime?: string;
+  items?: unknown[];
 }
 
 export interface Project {
@@ -43,6 +47,8 @@ export interface Project {
   permission: string;
   createdAt: string;
   updatedAt: string;
+  kind?: string;
+  groupId?: string | null;
 }
 
 export interface AuthConfig {

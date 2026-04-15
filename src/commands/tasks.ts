@@ -15,17 +15,31 @@ tasksCommand
   .option('-p, --project <projectId>', 'Filter by project ID')
   .option('-c, --completed', 'Show completed tasks')
   .option('-u, --uncompleted', 'Show uncompleted tasks only')
+  .option('-l, --limit <number>', 'Maximum number of tasks to fetch', '50')
+  .option('-o, --offset <number>', 'Number of tasks to skip', '0')
   .action(async (options) => {
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
+      }
+
+      if (!validators.isValidNumber(options.limit, 1, 500)) {
+        logger.error(validationMessages.number(1, 500));
+        return process.exit(1);
+      }
+
+      if (!validators.isValidNumber(options.offset, 0, 100000)) {
+        logger.error(validationMessages.number(0, 100000));
+        return process.exit(1);
       }
 
       logger.info('Fetching tasks...');
 
       const completed = options.completed ? true : options.uncompleted ? false : undefined;
-      const result = await api.getTasks(options.project, completed);
+      const limit = parseInt(options.limit, 10);
+      const offset = parseInt(options.offset, 10);
+      const result = await api.getTasks(options.project, completed, limit, offset);
 
       if (result.tasks.length === 0) {
         logger.info('No tasks found');
@@ -39,13 +53,11 @@ tasksCommand
       });
 
       if (result.hasMore) {
-        logger.info(
-          `Showing ${result.tasks.length} of ${result.total} tasks. Use limit/offset for more.`
-        );
+        logger.info(`Showing ${result.tasks.length} tasks. Use --limit/--offset for more.`);
       }
     } catch (error: any) {
       logger.error(`Failed to list tasks: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -60,7 +72,7 @@ tasksCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       const answers = await inquirer.prompt([
@@ -100,6 +112,16 @@ tasksCommand
         },
       ]);
 
+      if (options.title && !validators.isValidTaskTitle(options.title)) {
+        logger.error(validationMessages.taskTitle);
+        return process.exit(1);
+      }
+
+      if (options.due && !validators.isValidDate(options.due)) {
+        logger.error(validationMessages.date);
+        return process.exit(1);
+      }
+
       const task: Partial<Task> = {
         title: options.title || answers.title,
         content: options.content || answers.content,
@@ -115,7 +137,7 @@ tasksCommand
       console.log(`Task ID: ${createdTask.id}`);
     } catch (error: any) {
       logger.error(`Failed to add task: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -126,7 +148,7 @@ tasksCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Fetching task ${id}...`);
@@ -136,7 +158,7 @@ tasksCommand
       console.log(JSON.stringify(task, null, 2));
     } catch (error: any) {
       logger.error(`Failed to show task: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -153,22 +175,34 @@ tasksCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Updating task ${id}...`);
 
       const updates: Partial<Task> = {};
-      if (options.title) updates.title = options.title;
+      if (options.title) {
+        if (!validators.isValidTaskTitle(options.title)) {
+          logger.error(validationMessages.taskTitle);
+          return process.exit(1);
+        }
+        updates.title = options.title;
+      }
       if (options.content) updates.content = options.content;
       if (options.project) updates.projectId = options.project;
-      if (options.due) updates.dueDate = options.due;
+      if (options.due) {
+        if (!validators.isValidDate(options.due)) {
+          logger.error(validationMessages.date);
+          return process.exit(1);
+        }
+        updates.dueDate = options.due;
+      }
       if (options.completed !== undefined) updates.completed = true;
       if (options.uncompleted !== undefined) updates.completed = false;
 
       if (Object.keys(updates).length === 0) {
         logger.error('No updates specified');
-        process.exit(1);
+        return process.exit(1);
       }
 
       const updatedTask = await api.updateTask(id, updates);
@@ -178,7 +212,7 @@ tasksCommand
       console.log(`Completed: ${updatedTask.completed}`);
     } catch (error: any) {
       logger.error(`Failed to update task: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -189,7 +223,7 @@ tasksCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Deleting task ${id}...`);
@@ -199,7 +233,7 @@ tasksCommand
       logger.success(`Task ${id} deleted successfully`);
     } catch (error: any) {
       logger.error(`Failed to delete task: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -210,7 +244,7 @@ tasksCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Completing task ${id}...`);
@@ -220,7 +254,7 @@ tasksCommand
       logger.success(`Task ${id} marked as complete`);
     } catch (error: any) {
       logger.error(`Failed to complete task: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -231,7 +265,7 @@ tasksCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Marking task ${id} as uncomplete...`);
@@ -241,7 +275,7 @@ tasksCommand
       logger.success(`Task ${id} marked as uncomplete`);
     } catch (error: any) {
       logger.error(`Failed to uncomplete task: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 

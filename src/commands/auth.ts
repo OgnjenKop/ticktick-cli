@@ -9,22 +9,40 @@ import { validators, validationMessages } from '../utils/validation';
 const api = new TickTickApi();
 const config = new ConfigManager();
 
-const authCommand = new Command('auth').description('Authentication commands').alias('login');
+const authCommand = new Command('auth').description('Authentication commands');
+
+async function getValidatedUser(): Promise<ReturnType<ConfigManager['getUser']>> {
+  if (!api.isAuthenticated()) {
+    logger.warn('Not authenticated');
+    return undefined;
+  }
+
+  try {
+    const user = await api.getCurrentUser();
+    config.setUser(user);
+    return user;
+  } catch (error: any) {
+    config.clearAll();
+    logger.warn(`Authentication is no longer valid: ${error.message}`);
+    return undefined;
+  }
+}
 
 authCommand
   .command('login')
   .description('Login to TickTick')
   .option('-u, --username <username>', 'TickTick username')
   .option('-p, --password <password>', 'TickTick password')
-  .option('-b, --browser', 'Login via browser (default: true)')
+  .option('-b, --browser', 'Login via browser')
+  .option('--no-browser', 'Use credential login instead of browser login')
   .action(async (options) => {
     try {
       logger.info('Starting authentication...');
 
-      // Use password login if credentials are provided, otherwise use browser
-      const usePasswordLogin = options.username && options.password;
+      const hasAnyCredentials = Boolean(options.username || options.password);
+      const useBrowserLogin = options.browser !== false && !hasAnyCredentials;
 
-      if (!usePasswordLogin && options.browser !== false) {
+      if (useBrowserLogin) {
         logger.info('Opening browser for authentication...');
 
         // Open TickTick website for user to login
@@ -75,35 +93,15 @@ authCommand
 
         // Test the authentication
         try {
-          const response = await api.get<any>('/user/preferences/settings', {
-            params: { includeWeb: true },
-          });
-          const user = {
-            id: response.id,
-            username: response.email || 'unknown',
-            email: response.email || 'unknown',
-            name: response.name || response.email || 'unknown',
-          };
+          const user = await api.getCurrentUser();
           config.setUser(user);
           logger.success('Authentication successful!');
         } catch (error: any) {
           logger.error('Authentication failed. Invalid session cookie.');
           api.logout();
-          process.exit(1);
+          return process.exit(1);
         }
-      } else if (usePasswordLogin) {
-        // Use API login with provided credentials
-        const username = options.username;
-        const password = options.password;
-
-        logger.info('Logging in...');
-
-        const user = await api.login(username, password);
-        config.setUser(user);
-
-        logger.success(`Logged in as ${user.name || user.username}!`);
       } else {
-        // Prompt for credentials interactively
         const answers = await inquirer.prompt([
           {
             type: 'input',
@@ -114,6 +112,7 @@ authCommand
               if (!validators.isValidUsername(input)) return validationMessages.username;
               return true;
             },
+            when: !options.username,
           },
           {
             type: 'password',
@@ -125,19 +124,23 @@ authCommand
               if (!validators.isValidPassword(input)) return validationMessages.password;
               return true;
             },
+            when: !options.password,
           },
         ]);
 
+        const username = options.username || answers.username;
+        const password = options.password || answers.password;
+
         logger.info('Logging in...');
 
-        const user = await api.login(answers.username, answers.password);
+        const user = await api.login(username, password);
         config.setUser(user);
 
         logger.success(`Logged in as ${user.name || user.username}!`);
       }
     } catch (error: any) {
       logger.error(`Authentication failed: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -153,16 +156,10 @@ authCommand
 authCommand
   .command('status')
   .description('Check authentication status')
-  .action(() => {
-    if (api.isAuthenticated()) {
-      const user = config.getUser();
-      if (user) {
-        logger.success(`Authenticated as: ${user.name} (${user.email})`);
-      } else {
-        logger.success('Authenticated (user info not available)');
-      }
-    } else {
-      logger.warn('Not authenticated');
+  .action(async () => {
+    const user = await getValidatedUser();
+    if (user) {
+      logger.success(`Authenticated as: ${user.name} (${user.email})`);
     }
   });
 
@@ -170,17 +167,12 @@ authCommand
   .command('whoami')
   .description('Show current user info')
   .action(async () => {
-    if (!api.isAuthenticated()) {
-      logger.error('Not authenticated. Please login first.');
-      process.exit(1);
-    }
-
     try {
-      const user = config.getUser();
+      const user = await getValidatedUser();
       if (user) {
         console.log(JSON.stringify(user, null, 2));
       } else {
-        logger.warn('User info not available. Try logging in again.');
+        return process.exit(1);
       }
     } catch (error: any) {
       logger.error(`Failed to get user info: ${error.message}`);

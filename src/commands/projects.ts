@@ -16,7 +16,7 @@ projectsCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info('Fetching projects...');
@@ -33,7 +33,7 @@ projectsCommand
       });
     } catch (error: any) {
       logger.error(`Failed to list projects: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -46,7 +46,7 @@ projectsCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       const answers = await inquirer.prompt([
@@ -74,6 +74,16 @@ projectsCommand
         },
       ]);
 
+      if (options.name && !validators.isValidProjectName(options.name)) {
+        logger.error(validationMessages.projectName);
+        return process.exit(1);
+      }
+
+      if (options.color && !validators.isValidHexColor(options.color)) {
+        logger.error(validationMessages.hexColor);
+        return process.exit(1);
+      }
+
       const name = options.name || answers.name;
       const color = options.color || answers.color;
 
@@ -85,7 +95,7 @@ projectsCommand
       console.log(`Project ID: ${createdProject.id}`);
     } catch (error: any) {
       logger.error(`Failed to add project: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -96,7 +106,7 @@ projectsCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Fetching project ${id}...`);
@@ -106,7 +116,7 @@ projectsCommand
       console.log(JSON.stringify(project, null, 2));
     } catch (error: any) {
       logger.error(`Failed to show project: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -119,18 +129,30 @@ projectsCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Updating project ${id}...`);
 
       const updates: Partial<Project> = {};
-      if (options.name) updates.name = options.name;
-      if (options.color) updates.color = options.color;
+      if (options.name) {
+        if (!validators.isValidProjectName(options.name)) {
+          logger.error(validationMessages.projectName);
+          return process.exit(1);
+        }
+        updates.name = options.name;
+      }
+      if (options.color) {
+        if (!validators.isValidHexColor(options.color)) {
+          logger.error(validationMessages.hexColor);
+          return process.exit(1);
+        }
+        updates.color = options.color;
+      }
 
       if (Object.keys(updates).length === 0) {
         logger.error('No updates specified');
-        process.exit(1);
+        return process.exit(1);
       }
 
       const updatedProject = await api.updateProject(id, updates);
@@ -140,7 +162,7 @@ projectsCommand
       console.log(`New color: ${updatedProject.color}`);
     } catch (error: any) {
       logger.error(`Failed to update project: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 
@@ -151,7 +173,7 @@ projectsCommand
     try {
       if (!api.isAuthenticated()) {
         logger.error('Not authenticated. Please login first.');
-        process.exit(1);
+        return process.exit(1);
       }
 
       logger.info(`Deleting project ${id}...`);
@@ -161,7 +183,7 @@ projectsCommand
       logger.success(`Project ${id} deleted successfully`);
     } catch (error: any) {
       logger.error(`Failed to delete project: ${error.message}`);
-      process.exit(1);
+      return process.exit(1);
     }
   });
 

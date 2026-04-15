@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { authCommand } from './commands/auth';
+import { doctorCommand } from './commands/doctor';
 import { tasksCommand } from './commands/tasks';
 import { projectsCommand } from './commands/projects';
 
@@ -13,6 +14,7 @@ program
   .version('1.0.0');
 
 program.addCommand(authCommand);
+program.addCommand(doctorCommand);
 program.addCommand(tasksCommand);
 program.addCommand(projectsCommand);
 

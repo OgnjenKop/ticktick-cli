@@ -1,6 +1,8 @@
 # TickTick CLI
 
-A TypeScript command-line client for managing TickTick tasks and projects.
+An unofficial TypeScript command-line client for managing TickTick tasks and projects.
+
+This project is not affiliated with, endorsed by, or sponsored by TickTick.
 
 ## Features
 
@@ -17,7 +19,15 @@ A TypeScript command-line client for managing TickTick tasks and projects.
 
 ## Installation
 
-### Local development
+### From npm
+
+After the package is published to npm:
+
+```bash
+npm install -g ticktick-cli
+```
+
+### From source
 
 ```bash
 npm install
@@ -25,16 +35,10 @@ npm run build
 npm link
 ```
 
-After linking, use the CLI with:
+Then run:
 
 ```bash
 tt --help
-```
-
-### From npm (when published)
-
-```bash
-npm install -g ticktick-cli
 ```
 
 ## Quick Start
@@ -126,6 +130,16 @@ npm run lint
 ## Configuration
 
 Authentication and user data are stored locally via `configstore` under the package name `ticktick-cli`.
+
+## Contributing
+
+Issues and pull requests are welcome. Please keep changes focused, update tests when behavior changes, and run the validation commands before opening a PR:
+
+```bash
+npm run build
+npm test
+npm run lint
+```
 
 ## License
 

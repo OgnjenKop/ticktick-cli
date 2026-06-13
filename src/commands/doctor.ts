@@ -1,8 +1,6 @@
 import { Command } from 'commander';
-import { TickTickApi } from '../core/api';
+import { api } from '../core/api';
 import { logger } from '../utils/logger';
-
-const api = new TickTickApi();
 
 const doctorCommand = new Command('doctor')
   .description('Run live connectivity and API smoke checks')
@@ -42,7 +40,8 @@ const doctorCommand = new Command('doctor')
         } else {
           logger.error('Not authenticated. Please login first.');
         }
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       log.info('Checking current user...');
@@ -126,7 +125,7 @@ const doctorCommand = new Command('doctor')
         logger.error(`Doctor failed: ${error.message}`);
       }
 
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 

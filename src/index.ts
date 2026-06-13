@@ -5,13 +5,14 @@ import { authCommand } from './commands/auth';
 import { doctorCommand } from './commands/doctor';
 import { tasksCommand } from './commands/tasks';
 import { projectsCommand } from './commands/projects';
+import { packageInfo } from './utils/package-info';
 
 const program = new Command();
 
 program
   .name('tt')
   .description('TickTick CLI - A command-line interface for TickTick API')
-  .version('1.0.0');
+  .version(packageInfo.version);
 
 program.addCommand(authCommand);
 program.addCommand(doctorCommand);

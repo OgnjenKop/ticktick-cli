@@ -2,11 +2,10 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import open from 'open';
 import { logger } from '../utils/logger';
-import { TickTickApi } from '../core/api';
+import { api } from '../core/api';
 import { ConfigManager } from '../core/config';
 import { validators, validationMessages } from '../utils/validation';
 
-const api = new TickTickApi();
 const config = new ConfigManager();
 
 const authCommand = new Command('auth').description('Authentication commands');
@@ -99,7 +98,8 @@ authCommand
         } catch (error: any) {
           logger.error('Authentication failed. Invalid session cookie.');
           api.logout();
-          return process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       } else {
         const answers = await inquirer.prompt([
@@ -140,7 +140,7 @@ authCommand
       }
     } catch (error: any) {
       logger.error(`Authentication failed: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -172,10 +172,11 @@ authCommand
       if (user) {
         console.log(JSON.stringify(user, null, 2));
       } else {
-        return process.exit(1);
+        process.exitCode = 1;
       }
     } catch (error: any) {
       logger.error(`Failed to get user info: ${error.message}`);
+      process.exitCode = 1;
     }
   });
 

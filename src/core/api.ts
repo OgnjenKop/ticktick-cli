@@ -1,11 +1,9 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from 'axios';
 import ConfigStore from 'configstore';
 import { User, Project, Task } from './types';
-import * as fs from 'fs';
-import * as path from 'path';
 import Bottleneck from 'bottleneck';
 import EventEmitter from 'events';
-import { networkInterfaces } from 'os';
+import { packageInfo } from '../utils/package-info';
 
 interface TickTickApiConfig {
   baseURL?: string;
@@ -28,9 +26,6 @@ interface TickTickApiError extends Error {
   code?: string;
 }
 
-const pkgPath = path.join(__dirname, '../../package.json');
-const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-
 // Stable JSON serialization for cache keys
 function stableStringify(obj: any): string {
   if (obj === null || typeof obj !== 'object') {
@@ -50,12 +45,11 @@ export class TickTickApi {
   private cache: Map<string, { data: any; timestamp: number }> = new Map();
   private rateLimiter: Bottleneck.Group;
   private eventEmitter: EventEmitter;
-  private offlineQueue: Array<() => Promise<any>> = [];
   private configOptions: TickTickApiConfig;
   private cacheCleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config?: TickTickApiConfig) {
-    this.config = new ConfigStore(pkg.name);
+    this.config = new ConfigStore(packageInfo.name);
     this.configOptions = {
       baseURL: process.env.TICKTICK_API_BASE_URL || 'https://api.ticktick.com/api/v2',
       timeout: 10000,
@@ -83,7 +77,7 @@ export class TickTickApi {
       baseURL: this.configOptions.baseURL,
       timeout: this.configOptions.timeout,
       headers: {
-        'User-Agent': `${pkg.name}/${pkg.version}`,
+        'User-Agent': `${packageInfo.name}/${packageInfo.version}`,
         'Content-Type': 'application/json',
       },
       withCredentials: true,
@@ -97,7 +91,7 @@ export class TickTickApi {
       if (this.token) {
         config.headers.Cookie = `t=${this.token}`;
         config.headers['X-Device'] = 'web';
-        config.headers['X-Client-Version'] = pkg.version;
+        config.headers['X-Client-Version'] = packageInfo.version;
       }
       return config;
     });
@@ -167,7 +161,6 @@ export class TickTickApi {
     this.stopCacheCleanup();
     this.eventEmitter.removeAllListeners();
     this.cache.clear();
-    this.offlineQueue = [];
   }
 
   private cleanupCache(): void {
@@ -189,31 +182,6 @@ export class TickTickApi {
       for (let i = 0; i < this.cache.size - maxSize; i++) {
         this.cache.delete(entries[i][0]);
       }
-    }
-  }
-
-  /**
-   * Check if the system has network connectivity
-   * Note: This checks for network interfaces, not actual internet connectivity
-   * For reliable connectivity checks, make a test request to the API
-   */
-  private isOnline(): boolean {
-    try {
-      const nets = networkInterfaces();
-      for (const name of Object.keys(nets)) {
-        const net = nets[name];
-        if (!net) continue;
-        for (const netaddr of net) {
-          // Skip internal (loopback) interfaces
-          if (netaddr.family === 'IPv4' && !netaddr.internal) {
-            return true;
-          }
-        }
-      }
-      return false;
-    } catch {
-      // If we can't check network interfaces, assume online
-      return true;
     }
   }
 
@@ -289,22 +257,6 @@ export class TickTickApi {
     }
 
     return this.rateLimiter.key(key).schedule(fn);
-  }
-
-  // Offline queue management
-  private async processOfflineQueue(): Promise<void> {
-    if (this.isOnline() && this.offlineQueue.length > 0) {
-      const queue = [...this.offlineQueue];
-      this.offlineQueue = [];
-
-      for (const operation of queue) {
-        try {
-          await operation();
-        } catch (error) {
-          console.error('Failed to process offline operation:', error);
-        }
-      }
-    }
   }
 
   private buildUser(settings: any, fallbackUsername: string = 'unknown'): User {
@@ -708,14 +660,7 @@ export class TickTickApi {
     }
   }
 
-  // Offline support
-  public async createTask(task: Partial<Task>, offline: boolean = false): Promise<Task> {
-    if (offline || !this.isOnline()) {
-      const offlineTask = { ...task, id: 'offline-' + Date.now() } as Task;
-      this.offlineQueue.push(() => this.createTask(task, false));
-      return offlineTask;
-    }
-
+  public async createTask(task: Partial<Task>): Promise<Task> {
     try {
       const response = await this.withRateLimiting(() => this.client.post('/batch/task', task));
 
@@ -730,24 +675,7 @@ export class TickTickApi {
     }
   }
 
-  // Add method to process offline queue
-  public async syncOfflineChanges(): Promise<void> {
-    await this.processOfflineQueue();
-  }
-
-  // Add analytics method
-  public async trackEvent(event: string, data?: any): Promise<void> {
-    if (this.config.get('enableAnalytics')) {
-      try {
-        await this.withRateLimiting(() => this.client.post('/analytics/event', { event, data }));
-      } catch (error) {
-        // Silent fail for analytics
-        console.debug('Analytics error:', error);
-      }
-    }
-  }
-
-  // Basic methods for backward compatibility
+  // Basic methods
   public isAuthenticated(): boolean {
     return !!this.token;
   }
@@ -795,3 +723,5 @@ export class TickTickApi {
     return response.data;
   }
 }
+
+export const api = new TickTickApi();

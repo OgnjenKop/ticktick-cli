@@ -1,23 +1,42 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { logger } from '../utils/logger';
-import { TickTickApi } from '../core/api';
+import { api } from '../core/api';
 import { Project } from '../core/types';
 import { validators, validationMessages } from '../utils/validation';
 
-const api = new TickTickApi();
-
 const projectsCommand = new Command('projects').description('Project management commands');
+
+function checkAuth(): boolean {
+  if (!api.isAuthenticated()) {
+    logger.error('Not authenticated. Please login first.');
+    process.exitCode = 1;
+    return false;
+  }
+  return true;
+}
+
+async function confirmDelete(resource: string, id: string, yes: boolean): Promise<boolean> {
+  if (yes) return true;
+
+  const { confirmed } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'confirmed',
+      message: `Are you sure you want to delete ${resource} ${id}?`,
+      default: false,
+    },
+  ]);
+
+  return confirmed;
+}
 
 projectsCommand
   .command('list')
   .description('List all projects')
   .action(async () => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       logger.info('Fetching projects...');
 
@@ -33,7 +52,7 @@ projectsCommand
       });
     } catch (error: any) {
       logger.error(`Failed to list projects: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -44,10 +63,7 @@ projectsCommand
   .option('-c, --color <color>', 'Project color (hex code)')
   .action(async (options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       const answers = await inquirer.prompt([
         {
@@ -76,12 +92,14 @@ projectsCommand
 
       if (options.name && !validators.isValidProjectName(options.name)) {
         logger.error(validationMessages.projectName);
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       if (options.color && !validators.isValidHexColor(options.color)) {
         logger.error(validationMessages.hexColor);
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const name = options.name || answers.name;
@@ -95,7 +113,7 @@ projectsCommand
       console.log(`Project ID: ${createdProject.id}`);
     } catch (error: any) {
       logger.error(`Failed to add project: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -104,10 +122,7 @@ projectsCommand
   .description('Show project details')
   .action(async (id) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       logger.info(`Fetching project ${id}...`);
 
@@ -116,7 +131,7 @@ projectsCommand
       console.log(JSON.stringify(project, null, 2));
     } catch (error: any) {
       logger.error(`Failed to show project: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -127,32 +142,32 @@ projectsCommand
   .option('-c, --color <color>', 'New project color (hex code)')
   .action(async (id, options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       logger.info(`Updating project ${id}...`);
 
       const updates: Partial<Project> = {};
-      if (options.name) {
+      if (options.name !== undefined) {
         if (!validators.isValidProjectName(options.name)) {
           logger.error(validationMessages.projectName);
-          return process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         updates.name = options.name;
       }
-      if (options.color) {
-        if (!validators.isValidHexColor(options.color)) {
+      if (options.color !== undefined) {
+        if (options.color && !validators.isValidHexColor(options.color)) {
           logger.error(validationMessages.hexColor);
-          return process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         updates.color = options.color;
       }
 
       if (Object.keys(updates).length === 0) {
         logger.error('No updates specified');
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const updatedProject = await api.updateProject(id, updates);
@@ -162,18 +177,29 @@ projectsCommand
       console.log(`New color: ${updatedProject.color}`);
     } catch (error: any) {
       logger.error(`Failed to update project: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
 projectsCommand
   .command('delete <id>')
   .description('Delete a project')
-  .action(async (id) => {
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .action(async (id, options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
+      if (!checkAuth()) return;
+
+      if (!options.yes && process.stdin.isTTY === false) {
+        logger.error(
+          'Cannot prompt for confirmation in non-interactive mode. Use --yes to confirm.'
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!(await confirmDelete('project', id, options.yes))) {
+        logger.info('Delete cancelled');
+        return;
       }
 
       logger.info(`Deleting project ${id}...`);
@@ -183,7 +209,7 @@ projectsCommand
       logger.success(`Project ${id} deleted successfully`);
     } catch (error: any) {
       logger.error(`Failed to delete project: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 

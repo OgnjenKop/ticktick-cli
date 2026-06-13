@@ -1,13 +1,35 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { logger } from '../utils/logger';
-import { TickTickApi } from '../core/api';
+import { api } from '../core/api';
 import { Task } from '../core/types';
 import { validators, validationMessages } from '../utils/validation';
 
-const api = new TickTickApi();
-
 const tasksCommand = new Command('tasks').description('Task management commands');
+
+function checkAuth(): boolean {
+  if (!api.isAuthenticated()) {
+    logger.error('Not authenticated. Please login first.');
+    process.exitCode = 1;
+    return false;
+  }
+  return true;
+}
+
+async function confirmDelete(resource: string, id: string, yes: boolean): Promise<boolean> {
+  if (yes) return true;
+
+  const { confirmed } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'confirmed',
+      message: `Are you sure you want to delete ${resource} ${id}?`,
+      default: false,
+    },
+  ]);
+
+  return confirmed;
+}
 
 tasksCommand
   .command('list')
@@ -19,19 +41,24 @@ tasksCommand
   .option('-o, --offset <number>', 'Number of tasks to skip', '0')
   .action(async (options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
+      if (!checkAuth()) return;
+
+      if (options.completed && options.uncompleted) {
+        logger.error('Cannot use both --completed and --uncompleted');
+        process.exitCode = 1;
+        return;
       }
 
       if (!validators.isValidNumber(options.limit, 1, 500)) {
         logger.error(validationMessages.number(1, 500));
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       if (!validators.isValidNumber(options.offset, 0, 100000)) {
         logger.error(validationMessages.number(0, 100000));
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       logger.info('Fetching tasks...');
@@ -57,7 +84,7 @@ tasksCommand
       }
     } catch (error: any) {
       logger.error(`Failed to list tasks: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -70,10 +97,7 @@ tasksCommand
   .option('-d, --due <dueDate>', 'Due date (YYYY-MM-DD)')
   .action(async (options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       const answers = await inquirer.prompt([
         {
@@ -114,12 +138,14 @@ tasksCommand
 
       if (options.title && !validators.isValidTaskTitle(options.title)) {
         logger.error(validationMessages.taskTitle);
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       if (options.due && !validators.isValidDate(options.due)) {
         logger.error(validationMessages.date);
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const task: Partial<Task> = {
@@ -137,7 +163,7 @@ tasksCommand
       console.log(`Task ID: ${createdTask.id}`);
     } catch (error: any) {
       logger.error(`Failed to add task: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -146,10 +172,7 @@ tasksCommand
   .description('Show task details')
   .action(async (id) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       logger.info(`Fetching task ${id}...`);
 
@@ -158,7 +181,7 @@ tasksCommand
       console.log(JSON.stringify(task, null, 2));
     } catch (error: any) {
       logger.error(`Failed to show task: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -173,27 +196,32 @@ tasksCommand
   .option('--uncompleted', 'Mark task as uncompleted')
   .action(async (id, options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
+      if (!checkAuth()) return;
+
+      if (options.completed && options.uncompleted) {
+        logger.error('Cannot use both --completed and --uncompleted');
+        process.exitCode = 1;
+        return;
       }
 
       logger.info(`Updating task ${id}...`);
 
       const updates: Partial<Task> = {};
-      if (options.title) {
+      if (options.title !== undefined) {
         if (!validators.isValidTaskTitle(options.title)) {
           logger.error(validationMessages.taskTitle);
-          return process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         updates.title = options.title;
       }
-      if (options.content) updates.content = options.content;
-      if (options.project) updates.projectId = options.project;
-      if (options.due) {
-        if (!validators.isValidDate(options.due)) {
+      if (options.content !== undefined) updates.content = options.content;
+      if (options.project !== undefined) updates.projectId = options.project;
+      if (options.due !== undefined) {
+        if (options.due && !validators.isValidDate(options.due)) {
           logger.error(validationMessages.date);
-          return process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         updates.dueDate = options.due;
       }
@@ -202,7 +230,8 @@ tasksCommand
 
       if (Object.keys(updates).length === 0) {
         logger.error('No updates specified');
-        return process.exit(1);
+        process.exitCode = 1;
+        return;
       }
 
       const updatedTask = await api.updateTask(id, updates);
@@ -212,18 +241,29 @@ tasksCommand
       console.log(`Completed: ${updatedTask.completed}`);
     } catch (error: any) {
       logger.error(`Failed to update task: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
 tasksCommand
   .command('delete <id>')
   .description('Delete a task')
-  .action(async (id) => {
+  .option('-y, --yes', 'Skip confirmation prompt')
+  .action(async (id, options) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
+      if (!checkAuth()) return;
+
+      if (!options.yes && process.stdin.isTTY === false) {
+        logger.error(
+          'Cannot prompt for confirmation in non-interactive mode. Use --yes to confirm.'
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!(await confirmDelete('task', id, options.yes))) {
+        logger.info('Delete cancelled');
+        return;
       }
 
       logger.info(`Deleting task ${id}...`);
@@ -233,7 +273,7 @@ tasksCommand
       logger.success(`Task ${id} deleted successfully`);
     } catch (error: any) {
       logger.error(`Failed to delete task: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -242,10 +282,7 @@ tasksCommand
   .description('Mark task as complete')
   .action(async (id) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       logger.info(`Completing task ${id}...`);
 
@@ -254,7 +291,7 @@ tasksCommand
       logger.success(`Task ${id} marked as complete`);
     } catch (error: any) {
       logger.error(`Failed to complete task: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -263,10 +300,7 @@ tasksCommand
   .description('Mark task as uncomplete')
   .action(async (id) => {
     try {
-      if (!api.isAuthenticated()) {
-        logger.error('Not authenticated. Please login first.');
-        return process.exit(1);
-      }
+      if (!checkAuth()) return;
 
       logger.info(`Marking task ${id} as uncomplete...`);
 
@@ -275,7 +309,7 @@ tasksCommand
       logger.success(`Task ${id} marked as uncomplete`);
     } catch (error: any) {
       logger.error(`Failed to uncomplete task: ${error.message}`);
-      return process.exit(1);
+      process.exitCode = 1;
     }
   });
 

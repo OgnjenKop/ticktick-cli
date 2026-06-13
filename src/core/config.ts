@@ -1,16 +1,12 @@
 import ConfigStore from 'configstore';
 import { AuthConfig, User } from './types';
-import * as fs from 'fs';
-import * as path from 'path';
-
-const pkgPath = path.join(__dirname, '../../package.json');
-const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+import { packageInfo } from '../utils/package-info';
 
 export class ConfigManager {
   private config: ConfigStore;
 
   constructor() {
-    this.config = new ConfigStore(pkg.name);
+    this.config = new ConfigStore(packageInfo.name);
   }
 
   public getConfig(): AuthConfig {

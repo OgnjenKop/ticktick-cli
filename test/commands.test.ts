@@ -10,7 +10,14 @@ const apiMock = {
   createTask: jest.fn(),
   createProject: jest.fn(),
   deleteTask: jest.fn(),
+  deleteProject: jest.fn(),
   getProjects: jest.fn(),
+  getTaskById: jest.fn(),
+  updateTask: jest.fn(),
+  completeTask: jest.fn(),
+  uncompleteTask: jest.fn(),
+  getProjectById: jest.fn(),
+  updateProject: jest.fn(),
 };
 
 const configMock = {
@@ -24,6 +31,7 @@ const loggerMock = {
   success: jest.fn(),
   warn: jest.fn(),
   error: jest.fn(),
+  log: jest.fn(),
 };
 
 jest.mock('inquirer', () => ({
@@ -39,7 +47,7 @@ jest.mock('open', () => ({
 }));
 
 jest.mock('../src/core/api', () => ({
-  TickTickApi: jest.fn(() => apiMock),
+  api: apiMock,
 }));
 
 jest.mock('../src/core/config', () => ({
@@ -66,19 +74,13 @@ async function runCommand(commandModulePath: string, argv: string[]) {
 }
 
 describe('CLI commands', () => {
-  const processExitSpy = jest.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-
   beforeEach(() => {
     Object.values(apiMock).forEach((mockFn) => mockFn.mockReset());
     Object.values(configMock).forEach((mockFn) => mockFn.mockReset());
     Object.values(loggerMock).forEach((mockFn) => mockFn.mockReset());
     promptMock.mockReset();
     openMock.mockReset();
-    processExitSpy.mockClear();
-  });
-
-  afterAll(() => {
-    processExitSpy.mockRestore();
+    process.exitCode = undefined;
   });
 
   describe('auth login', () => {
@@ -101,6 +103,7 @@ describe('CLI commands', () => {
       expect(openMock).not.toHaveBeenCalled();
       expect(apiMock.login).toHaveBeenCalledWith('person@example.com', 'secret123');
       expect(configMock.setUser).toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
     });
 
     it('warns and clears config when stored auth is stale', async () => {
@@ -150,27 +153,104 @@ describe('CLI commands', () => {
 
     it('rejects invalid limit values before calling the API', async () => {
       apiMock.isAuthenticated.mockReturnValue(true);
-      apiMock.getTasks.mockResolvedValue({
-        tasks: [],
-        total: 0,
-        hasMore: false,
-      });
 
       await runCommand('../src/commands/tasks', ['list', '--limit', '0', '--offset', '0']);
 
       expect(loggerMock.error).toHaveBeenCalledWith('Value must be between 1 and 500');
-      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('rejects mutually exclusive completed filters', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+
+      await runCommand('../src/commands/tasks', ['list', '--completed', '--uncompleted']);
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'Cannot use both --completed and --uncompleted'
+      );
+      expect(process.exitCode).toBe(1);
+    });
+  });
+
+  describe('tasks delete', () => {
+    it('deletes a task after confirmation', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+      promptMock.mockResolvedValue({ confirmed: true });
+      apiMock.deleteTask.mockResolvedValue(undefined);
+
+      await runCommand('../src/commands/tasks', ['delete', 'task-1']);
+
+      expect(promptMock).toHaveBeenCalledWith([
+        expect.objectContaining({
+          message: 'Are you sure you want to delete task task-1?',
+        }),
+      ]);
+      expect(apiMock.deleteTask).toHaveBeenCalledWith('task-1');
+    });
+
+    it('skips confirmation with --yes', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+      apiMock.deleteTask.mockResolvedValue(undefined);
+
+      await runCommand('../src/commands/tasks', ['delete', 'task-1', '--yes']);
+
+      expect(promptMock).not.toHaveBeenCalled();
+      expect(apiMock.deleteTask).toHaveBeenCalledWith('task-1');
+    });
+
+    it('cancels delete when user declines confirmation', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+      promptMock.mockResolvedValue({ confirmed: false });
+
+      await runCommand('../src/commands/tasks', ['delete', 'task-1']);
+
+      expect(apiMock.deleteTask).not.toHaveBeenCalled();
+      expect(loggerMock.info).toHaveBeenCalledWith('Delete cancelled');
+    });
+  });
+
+  describe('tasks update', () => {
+    it('allows clearing content by passing an empty string', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+      apiMock.updateTask.mockResolvedValue({
+        id: 'task-1',
+        title: 'Title',
+        content: '',
+        completed: false,
+      });
+
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+
+      await runCommand('../src/commands/tasks', ['update', 'task-1', '--content', '']);
+
+      expect(apiMock.updateTask).toHaveBeenCalledWith(
+        'task-1',
+        expect.objectContaining({ content: '' })
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('rejects mutually exclusive completed flags', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+
+      await runCommand('../src/commands/tasks', [
+        'update',
+        'task-1',
+        '--completed',
+        '--uncompleted',
+      ]);
+
+      expect(loggerMock.error).toHaveBeenCalledWith(
+        'Cannot use both --completed and --uncompleted'
+      );
+      expect(process.exitCode).toBe(1);
     });
   });
 
   describe('projects add', () => {
     it('rejects invalid color flags before creating a project', async () => {
       apiMock.isAuthenticated.mockReturnValue(true);
-      apiMock.createProject.mockResolvedValue({
-        id: 'project-1',
-        name: 'Work',
-        color: '#4A90E2',
-      });
 
       await runCommand('../src/commands/projects', [
         'add',
@@ -183,7 +263,34 @@ describe('CLI commands', () => {
       expect(loggerMock.error).toHaveBeenCalledWith(
         'Invalid color format. Use hex format like #FF5733 or #F53'
       );
-      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(process.exitCode).toBe(1);
+    });
+  });
+
+  describe('projects delete', () => {
+    it('deletes a project after confirmation', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+      promptMock.mockResolvedValue({ confirmed: true });
+      apiMock.deleteProject.mockResolvedValue(undefined);
+
+      await runCommand('../src/commands/projects', ['delete', 'project-1']);
+
+      expect(promptMock).toHaveBeenCalledWith([
+        expect.objectContaining({
+          message: 'Are you sure you want to delete project project-1?',
+        }),
+      ]);
+      expect(apiMock.deleteProject).toHaveBeenCalledWith('project-1');
+    });
+
+    it('skips confirmation with --yes', async () => {
+      apiMock.isAuthenticated.mockReturnValue(true);
+      apiMock.deleteProject.mockResolvedValue(undefined);
+
+      await runCommand('../src/commands/projects', ['delete', 'project-1', '--yes']);
+
+      expect(promptMock).not.toHaveBeenCalled();
+      expect(apiMock.deleteProject).toHaveBeenCalledWith('project-1');
     });
   });
 

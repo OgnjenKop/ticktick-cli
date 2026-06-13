@@ -107,7 +107,12 @@ Notes:
 - `tt tasks update <id> [--title <title>] [--content <content>] [--project <projectId>] [--due YYYY-MM-DD] [--completed|--uncompleted]`
 - `tt tasks complete <id>`
 - `tt tasks uncomplete <id>`
-- `tt tasks delete <id>`
+- `tt tasks delete <id>` (interactive confirmation; use `--yes` to skip)
+
+Notes:
+- `--completed` and `--uncompleted` are mutually exclusive.
+- In non-interactive environments (scripts/CI), use `tt tasks delete <id> --yes`; otherwise the command will error because it cannot prompt.
+- Passing an empty string to an update flag (e.g., `--content ''`) clears that field.
 
 ### Projects
 
@@ -115,7 +120,11 @@ Notes:
 - `tt projects add --name <name> [--color <hex>]`
 - `tt projects show <id>`
 - `tt projects update <id> [--name <name>] [--color <hex>]`
-- `tt projects delete <id>`
+- `tt projects delete <id>` (interactive confirmation; use `--yes` to skip)
+
+Notes:
+- In non-interactive environments (scripts/CI), use `tt projects delete <id> --yes`; otherwise the command will error because it cannot prompt.
+- Passing an empty string to an update flag clears that field.
 
 ## Development
 
